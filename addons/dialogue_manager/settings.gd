@@ -26,6 +26,8 @@ const DIALOGUE_PROCESSOR_PATH: StringName = &"editor/advanced/dialogue_processor
 const CUSTOM_TEST_SCENE_PATH: StringName = &"editor/advanced/custom_test_scene_path"
 ## Extra script files to include in the auto-complete-able list
 const EXTRA_AUTO_COMPLETE_SCRIPT_SOURCES: StringName = &"editor/advanced/extra_auto_complete_script_sources"
+## Auto-generate Line IDs when saving dialogue
+const AUTO_GENERATE_IDS_ON_SAVE = &"editor/advanced/auto_generate_ids_on_save"
 
 ## The custom balloon for this game.
 const BALLOON_PATH: StringName = &"runtime/balloon_path"
@@ -96,6 +98,7 @@ static var SETTINGS_CONFIGURATION: Dictionary = {
 		is_advanced = true
 	},
 
+	AUTO_GENERATE_IDS_ON_SAVE: { value = false, type = TYPE_BOOL, is_advanced = true },
 	BALLOON_PATH: {
 		value = "",
 		type = TYPE_STRING,

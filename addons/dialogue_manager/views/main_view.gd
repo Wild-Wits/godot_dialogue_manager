@@ -59,6 +59,11 @@ signal confirmation_closed()
 @onready var code_edit: DMCodeEdit = %CodeEdit
 @onready var errors_panel: Control = %ErrorsPanel
 
+var proofread_button: Button
+var http_request: HTTPRequest
+var results_window: Window
+var results_text: RichTextLabel
+
 # The currently open file
 var current_file_path: String = "":
 	set(next_current_file_path):
@@ -171,6 +176,8 @@ func _ready() -> void:
 	EditorInterface.get_file_system_dock().files_moved.connect(_on_files_moved)
 
 	code_edit.get_v_scroll_bar().value_changed.connect(_on_code_edit_scroll_changed)
+
+	_setup_proofread_ui()
 
 
 func _exit_tree() -> void:
@@ -317,6 +324,13 @@ func save_file(path: String, rescan_file_system: bool = true) -> void:
 
 	if rescan_file_system:
 		EditorInterface.get_resource_filesystem().scan()
+
+	if DMSettings.get_setting(DMSettings.AUTO_GENERATE_IDS_ON_SAVE, false):
+		call_deferred(&"_auto_generate_line_ids")
+
+
+func _auto_generate_line_ids() -> void:
+	DMTranslationUtilities.generate_static_line_ids_for_project()
 
 
 func close_file(path: String) -> void:
@@ -820,5 +834,222 @@ func _on_blank_slate_new_button_pressed() -> void:
 func _on_blank_slate_quick_open_button_pressed() -> void:
 	quick_open()
 
-
 #endregion
+
+func _setup_proofread_ui() -> void:
+	# 1. Add Proofread button to the top toolbar
+	proofread_button = Button.new()
+	proofread_button.text = "Proofread"
+	proofread_button.tooltip_text = "Check grammar and spelling with LanguageTool"
+	proofread_button.pressed.connect(_on_proofread_pressed)
+
+	# Locate top menu/toolbar container (adjust node path if needed for your DM version)
+	var toolbar := %Toolbar
+	if toolbar:
+		toolbar.add_child(proofread_button)
+
+	# 2. Add HTTPRequest node for API calls
+	http_request = HTTPRequest.new()
+	add_child(http_request)
+	http_request.request_completed.connect(_on_proofread_response)
+
+	# 3. Create Non-Modal Floating Window
+	results_window = Window.new()
+	results_window.title = "LanguageTool Proofreading Results"
+	results_window.size = Vector2i(550, 500)
+	results_window.visible = false
+	results_window.transient = true # Stays attached/on top of Godot Editor
+	results_window.exclusive = false # NON-MODAL: Allows typing in editor while open!
+	results_window.close_requested.connect(
+		func():
+			results_window.hide(),
+	)
+
+	# Padding container inside window
+	var margin_container := MarginContainer.new()
+	margin_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin_container.add_theme_constant_override("margin_left", 12)
+	margin_container.add_theme_constant_override("margin_top", 12)
+	margin_container.add_theme_constant_override("margin_right", 12)
+	margin_container.add_theme_constant_override("margin_bottom", 12)
+	results_window.add_child(margin_container)
+
+	# 4. Copy-Pastable RichTextLabel
+	results_text = RichTextLabel.new()
+	results_text.bbcode_enabled = true
+	results_text.selection_enabled = true # Enables text highlighting & Ctrl+C
+	results_text.context_menu_enabled = true # Enables right-click "Copy" menu
+	results_text.focus_mode = Control.FOCUS_CLICK
+	margin_container.add_child(results_text)
+
+	add_child(results_window)
+
+
+func _on_proofread_pressed() -> void:
+	if not code_edit or code_edit.text.strip_edges().is_empty():
+		return
+
+	# Extract clean translatable strings using Dialogue Manager's compiler logic
+	var clean_text := _prepare_text_for_proofreading(code_edit.text)
+	if clean_text.strip_edges().is_empty():
+		results_text.text = "[color=yellow]No translatable dialogue or response lines found to proofread.[/color]"
+		results_window.popup_centered()
+		return
+
+	proofread_button.disabled = true
+	proofread_button.text = "Checking..."
+
+	# LanguageTool POST parameters
+	var body_data := "text=" + clean_text.uri_encode() + "&language=fr&level=picky"
+	var headers := ["Content-Type: application/x-www-form-urlencoded"]
+
+	var err := http_request.request(
+		"https://api.languagetool.org/v2/check",
+		headers,
+		HTTPClient.METHOD_POST,
+		body_data,
+	)
+
+	if err != OK:
+		proofread_button.disabled = false
+		proofread_button.text = "Proofread"
+		push_error("LanguageTool HTTP request failed to initialize.")
+
+
+## Prepares file text for proofreading by extracting dialogue/responses and stripping tags.
+## Non-dialogue lines are replaced with empty lines so payload line numbers match the editor 1:1.
+func _prepare_text_for_proofreading(raw_text: String) -> String:
+	var lines: PackedStringArray = raw_text.split("\n")
+	var compiled_lines: Dictionary = DMCompiler.compile_string(raw_text, "").lines
+	var prepared_lines: PackedStringArray = []
+
+	for i in range(lines.size()):
+		var line: String = lines[i]
+		var l: String = line.strip_edges()
+
+		# Ignore non-dialogue / non-response lines
+		if (
+			not [DMConstants.TYPE_DIALOGUE, DMConstants.TYPE_RESPONSE].has(
+				DMCompiler.get_line_type(l)
+			)
+			or not compiled_lines.has(str(i))
+		):
+			prepared_lines.append("")
+			continue
+
+		# 1. Strip [ID:...] tag first so its inner colon doesn't break string splitting
+		var clean_line := _strip_line_id(line)
+		var clean_l := clean_line.strip_edges()
+
+		# 2. Extract translatable text
+		var translatable_text: String = ""
+		if clean_l.begins_with("- "):
+			# Response line option
+			translatable_text = DMCompiler.extract_translatable_string(clean_l)
+		else:
+			# Dialogue line: split ONLY at the first unescaped colon after character name
+			var colon_idx := _find_first_unescaped_colon(clean_l)
+			if colon_idx != -1:
+				translatable_text = clean_l.substr(colon_idx + 1).strip_edges()
+			else:
+				translatable_text = clean_l
+
+		# 3. Clean out remaining BBCode, variables, and formatting tags
+		translatable_text = _strip_dialogue_tags(translatable_text)
+		prepared_lines.append(translatable_text)
+
+	return "\n".join(prepared_lines)
+
+
+## Strips [ID:...] tags from a line
+func _strip_line_id(text: String) -> String:
+	var id_regex := RegEx.create_from_string("\\[ID:[^\\]]+\\]")
+	return id_regex.sub(text, "", true)
+
+
+## Finds the index of the first unescaped colon in a string
+func _find_first_unescaped_colon(text: String) -> int:
+	for i in range(text.length()):
+		if text[i] == ":":
+			if i == 0 or text[i - 1] != "\\":
+				return i
+	return -1
+
+
+## Strips variables {{var}}, BBCode tags, wait/speed tags, and inline conditions
+func _strip_dialogue_tags(text: String) -> String:
+	var result := text
+
+	# Remove Dialogue Manager variables {{var}} or {var}
+	var var_regex := RegEx.create_from_string("\\{+[^\\}]+\\}+")
+	result = var_regex.sub(result, "", true)
+
+	# Remove inline BBCode / speed / wait / pause / condition tags like [wait=1] or [if ...]
+	var tag_regex := RegEx.create_from_string("\\[[^\\]]+\\]")
+	result = tag_regex.sub(result, "", true)
+
+	return result.strip_edges()
+
+
+func _on_proofread_response(
+	result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray,
+) -> void:
+	proofread_button.disabled = false
+	proofread_button.text = "Proofread"
+
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		results_text.text = "[color=red]Failed to connect to LanguageTool API (HTTP Status: %d).[/color]" % response_code
+		_show_results_window()
+		return
+
+	var json := JSON.new()
+	if json.parse(body.get_string_from_utf8()) != OK:
+		results_text.text = "[color=red]Failed to parse LanguageTool JSON response.[/color]"
+		_show_results_window()
+		return
+
+	var response: Dictionary = json.get_data()
+	var matches: Array = response.get("matches", [])
+
+	if matches.is_empty():
+		results_text.text = "[color=green][b]✓ No grammar or spelling issues found![/b][/color]"
+	else:
+		var clean_text := _prepare_text_for_proofreading(code_edit.text)
+		var raw_lines: PackedStringArray = code_edit.text.split("\n")
+		var output := "[b]Found %d potential issue(s):[/b]\n\n" % matches.size()
+
+		for item in matches:
+			var offset: int = item.get("offset", 0)
+			var length: int = item.get("length", 0)
+			var message: String = item.get("message", "Issue found")
+
+			var line_number := clean_text.substr(0, offset).count("\n") + 1
+			var match_word := clean_text.substr(offset, length)
+
+			var raw_context := ""
+			if line_number - 1 < raw_lines.size():
+				raw_context = raw_lines[line_number - 1].strip_edges()
+
+			var replacements: Array = item.get("replacements", [])
+			var suggestions := []
+			for r in replacements.slice(0, 3):
+				suggestions.append(r.get("value", ""))
+
+			var sug_string := ", ".join(suggestions) if not suggestions.is_empty() else "None"
+
+			output += "[b]Line %d:[/b] [color=orange]\"%s\"[/color]\n" % [line_number, match_word]
+			output += "• [i]Context:[/i] [color=gray]%s[/color]\n" % raw_context
+			output += "• [i]Issue:[/i] %s\n" % message
+			output += "• [color=green]Suggestions:[/color] %s\n\n" % sug_string
+
+		results_text.text = output
+
+	_show_results_window()
+
+
+func _show_results_window() -> void:
+	if not results_window.visible:
+		results_window.popup_centered()
