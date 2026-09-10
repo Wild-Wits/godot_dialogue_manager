@@ -844,7 +844,7 @@ func _setup_proofread_ui() -> void:
 	proofread_button.pressed.connect(_on_proofread_pressed)
 
 	# Locate top menu/toolbar container (adjust node path if needed for your DM version)
-	var toolbar := %Toolbar
+	var toolbar : Control = %Toolbar
 	if toolbar:
 		toolbar.add_child(proofread_button)
 
@@ -861,12 +861,12 @@ func _setup_proofread_ui() -> void:
 	results_window.transient = true # Stays attached/on top of Godot Editor
 	results_window.exclusive = false # NON-MODAL: Allows typing in editor while open!
 	results_window.close_requested.connect(
-		func():
+		func()-> void:
 			results_window.hide(),
 	)
 
 	# Padding container inside window
-	var margin_container := MarginContainer.new()
+	var margin_container : MarginContainer= MarginContainer.new()
 	margin_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	margin_container.add_theme_constant_override("margin_left", 12)
 	margin_container.add_theme_constant_override("margin_top", 12)
@@ -890,7 +890,7 @@ func _on_proofread_pressed() -> void:
 		return
 
 	# Extract clean translatable strings using Dialogue Manager's compiler logic
-	var clean_text := _prepare_text_for_proofreading(code_edit.text)
+	var clean_text : String = _prepare_text_for_proofreading(code_edit.text)
 	if clean_text.strip_edges().is_empty():
 		results_text.text = "[color=yellow]No translatable dialogue or response lines found to proofread.[/color]"
 		results_window.popup_centered()
@@ -900,10 +900,10 @@ func _on_proofread_pressed() -> void:
 	proofread_button.text = "Checking..."
 
 	# LanguageTool POST parameters
-	var body_data := "text=" + clean_text.uri_encode() + "&language=fr&level=picky"
-	var headers := ["Content-Type: application/x-www-form-urlencoded"]
+	var body_data :String= "text=" + clean_text.uri_encode() + "&language=fr&level=picky"
+	var headers :PackedStringArray= ["Content-Type: application/x-www-form-urlencoded"]
 
-	var err := http_request.request(
+	var err : Error= http_request.request(
 		"https://api.languagetool.org/v2/check",
 		headers,
 		HTTPClient.METHOD_POST,
@@ -923,7 +923,7 @@ func _prepare_text_for_proofreading(raw_text: String) -> String:
 	var compiled_lines: Dictionary = DMCompiler.compile_string(raw_text, "").lines
 	var prepared_lines: PackedStringArray = []
 
-	for i in range(lines.size()):
+	for i:int in range(lines.size()):
 		var line: String = lines[i]
 		var l: String = line.strip_edges()
 
@@ -938,8 +938,8 @@ func _prepare_text_for_proofreading(raw_text: String) -> String:
 			continue
 
 		# 1. Strip [ID:...] tag first so its inner colon doesn't break string splitting
-		var clean_line := _strip_line_id(line)
-		var clean_l := clean_line.strip_edges()
+		var clean_line :String= _strip_line_id(line)
+		var clean_l :String= clean_line.strip_edges()
 
 		# 2. Extract translatable text
 		var translatable_text: String = ""
@@ -948,7 +948,7 @@ func _prepare_text_for_proofreading(raw_text: String) -> String:
 			translatable_text = DMCompiler.extract_translatable_string(clean_l)
 		else:
 			# Dialogue line: split ONLY at the first unescaped colon after character name
-			var colon_idx := _find_first_unescaped_colon(clean_l)
+			var colon_idx : int = _find_first_unescaped_colon(clean_l)
 			if colon_idx != -1:
 				translatable_text = clean_l.substr(colon_idx + 1).strip_edges()
 			else:
@@ -963,13 +963,13 @@ func _prepare_text_for_proofreading(raw_text: String) -> String:
 
 ## Strips [ID:...] tags from a line
 func _strip_line_id(text: String) -> String:
-	var id_regex := RegEx.create_from_string("\\[ID:[^\\]]+\\]")
+	var id_regex :RegEx= RegEx.create_from_string("\\[ID:[^\\]]+\\]")
 	return id_regex.sub(text, "", true)
 
 
 ## Finds the index of the first unescaped colon in a string
 func _find_first_unescaped_colon(text: String) -> int:
-	for i in range(text.length()):
+	for i:int in range(text.length()):
 		if text[i] == ":":
 			if i == 0 or text[i - 1] != "\\":
 				return i
@@ -978,14 +978,14 @@ func _find_first_unescaped_colon(text: String) -> int:
 
 ## Strips variables {{var}}, BBCode tags, wait/speed tags, and inline conditions
 func _strip_dialogue_tags(text: String) -> String:
-	var result := text
+	var result :String= text
 
 	# Remove Dialogue Manager variables {{var}} or {var}
-	var var_regex := RegEx.create_from_string("\\{+[^\\}]+\\}+")
+	var var_regex :RegEx= RegEx.create_from_string("\\{+[^\\}]+\\}+")
 	result = var_regex.sub(result, "", true)
 
 	# Remove inline BBCode / speed / wait / pause / condition tags like [wait=1] or [if ...]
-	var tag_regex := RegEx.create_from_string("\\[[^\\]]+\\]")
+	var tag_regex :RegEx= RegEx.create_from_string("\\[[^\\]]+\\]")
 	result = tag_regex.sub(result, "", true)
 
 	return result.strip_edges()
@@ -1005,7 +1005,7 @@ func _on_proofread_response(
 		_show_results_window()
 		return
 
-	var json := JSON.new()
+	var json :JSON= JSON.new()
 	if json.parse(body.get_string_from_utf8()) != OK:
 		results_text.text = "[color=red]Failed to parse LanguageTool JSON response.[/color]"
 		_show_results_window()
@@ -1017,28 +1017,28 @@ func _on_proofread_response(
 	if matches.is_empty():
 		results_text.text = "[color=green][b]✓ No grammar or spelling issues found![/b][/color]"
 	else:
-		var clean_text := _prepare_text_for_proofreading(code_edit.text)
+		var clean_text :String= _prepare_text_for_proofreading(code_edit.text)
 		var raw_lines: PackedStringArray = code_edit.text.split("\n")
-		var output := "[b]Found %d potential issue(s):[/b]\n\n" % matches.size()
+		var output :String= "[b]Found %d potential issue(s):[/b]\n\n" % matches.size()
 
-		for item in matches:
+		for item:Dictionary in matches:
 			var offset: int = item.get("offset", 0)
 			var length: int = item.get("length", 0)
 			var message: String = item.get("message", "Issue found")
 
-			var line_number := clean_text.substr(0, offset).count("\n") + 1
-			var match_word := clean_text.substr(offset, length)
+			var line_number :int= clean_text.substr(0, offset).count("\n") + 1
+			var match_word :String= clean_text.substr(offset, length)
 
-			var raw_context := ""
+			var raw_context :String= ""
 			if line_number - 1 < raw_lines.size():
 				raw_context = raw_lines[line_number - 1].strip_edges()
 
 			var replacements: Array = item.get("replacements", [])
-			var suggestions := []
-			for r in replacements.slice(0, 3):
+			var suggestions :Array= []
+			for r:Dictionary in replacements.slice(0, 3):
 				suggestions.append(r.get("value", ""))
 
-			var sug_string := ", ".join(suggestions) if not suggestions.is_empty() else "None"
+			var sug_string :String= ", ".join(suggestions) if not suggestions.is_empty() else "None"
 
 			output += "[b]Line %d:[/b] [color=orange]\"%s\"[/color]\n" % [line_number, match_word]
 			output += "• [i]Context:[/i] [color=gray]%s[/color]\n" % raw_context
