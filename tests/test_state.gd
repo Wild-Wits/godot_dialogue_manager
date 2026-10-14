@@ -472,6 +472,17 @@ Nathan: {{Vector2.UP}} == {{Vector2(0, -1)}}")
 	assert(line.text == "%s == %s" % [str(Vector2.UP), str(Vector2(0, -1))], "Should match up.")
 
 
+func test_can_use_deep_values() -> void:
+	var resource: DialogueResource = create_resource("
+~ start
+Nathan: The value is {{StateForTests.dictionary[\"array\"][1]}}")
+
+	StateForTests.dictionary = { array = ["first", "second"] }
+
+	var line: DialogueLine = await resource.get_next_dialogue_line("start")
+	assert(line.text == "The value is second", "Should match second array value.")
+
+
 func test_can_use_lua_dictionary_syntax() -> void:
 	var resource: DialogueResource = create_resource("
 ~ start
@@ -481,7 +492,7 @@ $> StateForTests.dictionary = { \"key2\": \"value2\" }
 Nathan: Stop!
 $> StateForTests.dictionary.key3 = \"value3\"")
 
-	assert(StateForTests.dictionary.is_empty(), "Dictionary is empty")
+	StateForTests.dictionary = {}
 
 	var line: DialogueLine = await resource.get_next_dialogue_line("start")
 	assert(StateForTests.dictionary.size() == 1, "Dictionary has one entry")
@@ -659,6 +670,65 @@ Nathan: Value is {{OverloadedMethod(\"test\")}}
 
 	line = await resource.get_next_dialogue_line(line.next_id)
 	assert(line.text == "Value is test!", "Should use string method.")
+
+
+func test_csharp_overload_with_inherited_type() -> void:
+	var resource: DialogueResource = create_resource("
+using CSharpState
+
+~ start
+Nathan: Value is {{OverloadedMethod(some_node)}}.
+Nathan: Value is {{OverloadedMethod(some_node, 3)}}.
+=> END")
+
+	var some_node: Node2D = Node2D.new()
+	some_node.name = "SomeNode"
+	var states: Array = [{ "some_node": some_node }]
+	var line: DialogueLine = await resource.get_next_dialogue_line("start", states)
+	assert(line.text == "Value is Node:SomeNode.", "Should use the Node method for a Node2D.")
+
+	line = await resource.get_next_dialogue_line(line.next_id, states)
+	assert(line.text == "Value is Node:SomeNodex3.", "Should use the Node and int method for a Node2D and an int.")
+	some_node.free()
+
+
+func test_csharp_static_members_by_class_name() -> void:
+	var resource: DialogueResource = create_resource("
+~ start
+Nathan: Field is {{CSharpStaticState.StaticField}}, property is {{CSharpStaticState.StaticProperty}}, constant is {{CSharpStaticState.STATIC_CONSTANT}}, method is {{CSharpStaticState.StaticMethod()}}.
+$> CSharpStaticState.StaticField = 100
+$> CSharpStaticState.StaticProperty = \"changed\"
+Nathan: Field is now {{CSharpStaticState.StaticField}} and property is now {{CSharpStaticState.StaticProperty}}.
+$> CSharpStaticState.StaticField += 1
+Nathan: Field is now {{CSharpStaticState.StaticField}}.
+=> END")
+
+	var line: DialogueLine = await resource.get_next_dialogue_line("start")
+	assert(line.text == "Field is 42, property is static, constant is 3, method is 7.", "Should read static members by class name.")
+
+	line = await resource.get_next_dialogue_line(line.next_id)
+	assert(line.text == "Field is now 100 and property is now changed.", "Should assign static members by class name.")
+
+	line = await resource.get_next_dialogue_line(line.next_id)
+	assert(line.text == "Field is now 101.", "Should apply operators to static members by class name.")
+
+
+func test_csharp_static_members_via_instance() -> void:
+	var resource: DialogueResource = create_resource("
+~ start
+$> StaticField = 5
+Nathan: Field is {{StaticField}} and instance value is {{InstanceValue}}.
+$> state.StaticField = 6
+Nathan: Field is {{state.StaticField}}.
+=> END")
+
+	var state: Object = load("res://tests/CSharpStaticState.cs").new()
+	var states: Array = [state, { "state": state }]
+	var line: DialogueLine = await resource.get_next_dialogue_line("start", states)
+	assert(line.text == "Field is 5 and instance value is 1.", "Should read and write static members via an instance.")
+
+	line = await resource.get_next_dialogue_line(line.next_id, states)
+	assert(line.text == "Field is 6.", "Should read and write static members via a dotted instance.")
 
 
 func test_ignore_missing_state() -> void:
